@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.dagster]
+module_name = "amdee_xrd.definitions"
+code_location_name = "amdee_xrd"
+
+[project]
+name = "amdee_xrd"
+version = "0.1.0"
+description = "g"
+authors = [
+    {name = "Kacper Kowalik (Xarthisius)", email = "xarthisius.kk@gmail.com"},
+]
+dependencies = [
+    "setuptools>=75.1.0",
+    "dagster",
+    "dagster-cloud",
+    "dagster-docker",
+    "h5py",
+    "hdf5plugin",
+    "matplotlib",
+    "palettable",
+    "scipy",
+]
+requires-python = ">=3.12"
+readme = "README.md"
+license = {text = "BSD-3"}
+
+[project.optional-dependencies]
+dev = [
+    "dagster-webserver",
+    "pytest",
+]

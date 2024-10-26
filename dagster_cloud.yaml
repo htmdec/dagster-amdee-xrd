@@ -1,0 +1,6 @@
+run_queue:
+  max_concurrent_runs: 2
+locations:
+  - location_name: amdee_xrd
+    code_source:
+      module_name: amdee_xrd.definitions
