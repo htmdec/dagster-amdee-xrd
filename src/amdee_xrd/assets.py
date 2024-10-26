@@ -129,8 +129,8 @@ def _analyze_xrd_sample(context, folder_id, girder):
 executor = docker_executor.configured(
     {
         "env_vars": [
-            f"DATAFLOW_GIRDER_API_KEY={os.environ['DATAFLOW_GIRDER_API_KEY']}",
-            f"DATAFLOW_GIRDER_API_URL={os.environ['DATAFLOW_GIRDER_API_URL']}",
+            f"GIRDER_API_KEY={os.environ['GIRDER_API_KEY']}",
+            f"GIRDER_API_URL={os.environ['GIRDER_API_URL']}",
             f"DATAFLOW_ID={os.environ['DATAFLOW_ID']}",
             f"DATAFLOW_SPEC_ID={os.environ['DATAFLOW_SPEC_ID']}",
             f"DATAFLOW_SRC_FOLDER_ID={os.environ['DATAFLOW_SRC_FOLDER_ID']}",

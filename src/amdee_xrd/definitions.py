@@ -24,15 +24,17 @@ defs = Definitions(
     resources={
         "fs_io_manager": FilesystemIOManager(),
         "girder_io_manager": ConfigurableGirderIOManager(
-            api_key=EnvVar("DATAFLOW_GIRDER_API_KEY"),
-            api_url=EnvVar("DATAFLOW_GIRDER_API_URL"),
+            api_key=EnvVar("GIRDER_API_KEY"),
+            api_url=EnvVar("GIRDER_API_URL"),
+            token=EnvVar("GIRDER_TOKEN"),
             source_folder_id=EnvVar("DATAFLOW_SRC_FOLDER_ID"),
             target_folder_id=EnvVar("DATAFLOW_DST_FOLDER_ID"),
         ),
         "girder": GirderConnection(
             credentials=GirderCredentials(
-                api_key=EnvVar("DATAFLOW_GIRDER_API_KEY"),
-                api_url=EnvVar("DATAFLOW_GIRDER_API_URL"),
+                api_key=EnvVar("GIRDER_API_KEY"),
+                api_url=EnvVar("GIRDER_API_URL"),
+                token=EnvVar("GIRDER_TOKEN"),
             )
         ),
     },

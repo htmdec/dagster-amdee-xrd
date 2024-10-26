@@ -16,7 +16,6 @@ authors = [
 dependencies = [
     "setuptools>=75.1.0",
     "dagster",
-    "dagster-cloud",
     "dagster-docker",
     "h5py",
     "hdf5plugin",
