@@ -1,20 +1,20 @@
-import glob
 import os
-import tempfile
+import warnings
 
 from dagster import (
-    asset,
-    AutomationCondition,
     AssetExecutionContext,
+    AutomationCondition,
     Config,
     DataVersion,
     DataVersionsByPartition,
     DynamicPartitionsDefinition,
+    ExperimentalWarning,
     OpExecutionContext,
     RunConfig,
     RunRequest,
     ScheduleDefinition,
     SensorResult,
+    asset,
     define_asset_job,
     job,
     observable_source_asset,
@@ -24,8 +24,9 @@ from dagster import (
 from dagster_docker import docker_executor
 
 from .resources import GirderConnection
-from .utils import analyze_xrd_scan
+from .utils import XRDAnalysis
 
+warnings.filterwarnings("ignore", category=ExperimentalWarning)
 xrd_samples_partitions_def = DynamicPartitionsDefinition(name="xrd_samples")
 
 
@@ -40,13 +41,15 @@ def xrd_samples_check(context) -> DataVersion:
 def xrd_samples(
     context: AssetExecutionContext, girder: GirderConnection
 ) -> DataVersionsByPartition:
-
     result = {}
     for sample in girder.list_folder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
         master_files = girder.master_files(sample["_id"])
-        result[sample["name"]] = str(len(master_files))  # Use the number of items as the version, for now
+        result[sample["name"]] = str(
+            len(master_files)
+        )  # Use the number of items as the version, for now
 
     return DataVersionsByPartition(result)
+
 
 observation_job = define_asset_job("observation_job", [xrd_samples])
 
@@ -56,6 +59,7 @@ observation_schedule = ScheduleDefinition(
     job=observation_job,
 )
 
+
 @asset(
     io_manager_key="girder_io_manager",
     partitions_def=xrd_samples_partitions_def,
@@ -64,8 +68,10 @@ observation_schedule = ScheduleDefinition(
 )
 def some_xrd_sample(context: AssetExecutionContext, girder: GirderConnection) -> None:
     context.log.info(f"Generating XRD plots for {context.partition_key}")
-    folder = girder.folder_by_name(os.environ["DATAFLOW_SRC_FOLDER_ID"], context.partition_key)
-    _analyze_xrd_sample(context, folder["_id"], girder)
+    folder = girder.folder_by_name(
+        os.environ["DATAFLOW_SRC_FOLDER_ID"], context.partition_key
+    )
+    XRDAnalysis(context, folder["_id"], girder).analyze()
 
 
 class XRDSampleConfig(Config):
@@ -77,53 +83,7 @@ def analyze_xrd_sample(
     context: OpExecutionContext, config: XRDSampleConfig, girder: GirderConnection
 ):
     context.log.info(f"Generating XRD plots for {config.folder_id}")
-    _analyze_xrd_sample(context, config.folder_id, girder)
-
-def _analyze_xrd_sample(context, folder_id, girder):
-    files = {}
-    items = girder.list_item(folder_id)
-    for item in items:
-        if item["name"].endswith("_master.h5"):
-            prefix = item["name"].split("_master")[0]
-        elif "_data_" in item["name"]:
-            prefix = item["name"].split("_data_")[0]
-
-        if prefix not in files:
-            files[prefix] = {"master": None, "data": []}
-
-        if item["name"].endswith("_master.h5"):
-            files[prefix]["master"] = item
-        else:
-            files[prefix]["data"].append(item)
-
-    for item in files.values():
-        if item["master"] is None:
-            context.log.error(f"No master file found {item}")
-            continue
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Download the master file
-            master_file = girder.get_stream(item["master"]["_id"])
-            with open(os.path.join(tmpdir, item["master"]["name"]), "wb") as f:
-                f.write(master_file.read())
-            # Download the data files
-            for data_file in item["data"]:
-                data = girder.get_stream(data_file["_id"])
-                with open(os.path.join(tmpdir, data_file["name"]), "wb") as f:
-                    f.write(data.read())
-            # Perform the analysis
-            context.log.info(f"Processing {item['master']['name']} in {tmpdir}")
-            analyze_xrd_scan(tmpdir, context.log)
-
-            # Upload all generated png files
-            for png_file in glob.glob(os.path.join(tmpdir, "*.png")):
-                context.log.info(f"Uploading {os.path.basename(png_file)}")
-                girder.upload_file_to_folder(
-                    item["master"]["folderId"],
-                    png_file,
-                    mime_type="image/png",
-                    filename=os.path.basename(png_file),
-                )
+    XRDAnalysis(context, config.folder_id, girder).analyze()
 
 
 executor = docker_executor.configured(
@@ -180,7 +140,7 @@ def make_girder_folder_sensor(
                 )
             )
         return SensorResult(
-            run_requests=[],  #run_requests,
+            run_requests=[],  # run_requests,
             dynamic_partitions_requests=[
                 partitions_def.build_add_request([_["name"] for _ in new_folders])
             ],

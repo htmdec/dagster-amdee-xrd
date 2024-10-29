@@ -30,7 +30,7 @@ class GirderConnection(ConfigurableResource):
     def yield_for_execution(self, context):
         self._client = girder_client.GirderClient(apiUrl=self.credentials.api_url)
         self._client.token = self.credentials.token
-        #self._client.authenticate(apiKey=self.credentials.api_key)
+        # self._client.authenticate(apiKey=self.credentials.api_key)
         yield self
 
     def list_folder(self, folder_id):
@@ -86,7 +86,7 @@ class GirderConnection(ConfigurableResource):
 class GirderIOManager(IOManager):
     def __init__(self, api_url, api_key, token, source_folder_id, target_folder_id):
         self._cli = GirderClient(apiUrl=api_url)
-        #self._cli.authenticate(apiKey=api_key)
+        # self._cli.authenticate(apiKey=api_key)
         self._cli.token = token
         self.source_folder_id = source_folder_id
         self.target_folder_id = target_folder_id
@@ -180,5 +180,9 @@ class ConfigurableGirderIOManager(ConfigurableIOManagerFactory):
 
     def create_io_manager(self, context) -> GirderIOManager:
         return GirderIOManager(
-            self.api_url, self.api_key, self.token, self.source_folder_id, self.target_folder_id
+            self.api_url,
+            self.api_key,
+            self.token,
+            self.source_folder_id,
+            self.target_folder_id,
         )

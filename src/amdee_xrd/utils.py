@@ -1,5 +1,7 @@
 import glob
 import os
+import tempfile
+from importlib.metadata import version
 from math import pi
 
 import h5py
@@ -8,7 +10,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from palettable import cubehelix
 
-from .image_utilities import preprocess_image, azimuthal_integration
+from .image_utilities import azimuthal_integration, preprocess_image
 
 colormap = cubehelix.get_map("classic_16", reverse=True).get_mpl_colormap()
 # image collection and save path setting
@@ -135,3 +137,103 @@ def analyze_xrd_scan(save_folder, logger):
             r"$I$",
         )
         plt.savefig(save_file_pathname.replace("_image.png", "_integrated.png"))
+
+
+class XRDAnalysis:
+    def __init__(self, dagster_context, folder_id, girder_connection):
+        self.context = dagster_context
+        self.folder_id = folder_id
+        self.girder = girder_connection
+        self._items = None
+
+    @property
+    def items(self):
+        if self._items is None:
+            self._items = {}
+            for _ in self.girder.list_item(self.folder_id):
+                if _["name"].endswith("_master.h5"):
+                    prefix = _["name"].split("_master")[0]
+                elif "_data_" in _["name"]:
+                    prefix = _["name"].split("_data_")[0]
+
+                if prefix not in self._items:
+                    self._items[prefix] = {"master": None, "data": []}
+
+                if _["name"].endswith("_master.h5"):
+                    self._items[prefix]["master"] = _
+                else:
+                    self._items[prefix]["data"].append(_)
+        return self._items
+
+    @property
+    def version(self):
+        return f"amdee_xrd-{version('amdee_xrd')}"
+
+    def check_code_version(self, derivation):
+        for item_id in derivation:
+            item = self.girder.get_item(item_id)
+            if (
+                item.get("meta", {}).get("prov", {}).get("wasGeneratedBy")
+                == self.version
+            ):
+                return True
+        return False
+
+    def analyze(self):
+        for item in self.items.values():
+            if item["master"] is None:
+                self.context.log.error(f"No master file found {item}")
+                continue
+
+            if item["master"].get("meta", {}).get("prov", {}).get("hadDerivation"):
+                if self.check_code_version(
+                    item["master"]["meta"]["prov"]["hadDerivation"]
+                ):
+                    self.context.log.info(
+                        f"Skipping {item['master']['name']} as it has already been analyzed"
+                    )
+                    continue
+
+            outputs = []
+            # Create a temporary directory
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Download the master file
+                master_file = self.girder.get_stream(item["master"]["_id"])
+                with open(os.path.join(tmpdir, item["master"]["name"]), "wb") as f:
+                    f.write(master_file.read())
+                # Download the data files
+                for data_file in item["data"]:
+                    data = self.girder.get_stream(data_file["_id"])
+                    with open(os.path.join(tmpdir, data_file["name"]), "wb") as f:
+                        f.write(data.read())
+                # Perform the analysis
+                self.context.log.info(
+                    f"Processing {item['master']['name']} in {tmpdir}"
+                )
+                analyze_xrd_scan(tmpdir, self.context.log)
+
+                # Upload all generated png files
+                for png_file in glob.glob(os.path.join(tmpdir, "*.png")):
+                    self.context.log.info(f"Uploading {os.path.basename(png_file)}")
+                    # TODO check if file already exists
+                    png_upload = self.girder.upload_file_to_folder(
+                        item["master"]["folderId"],
+                        png_file,
+                        mime_type="image/png",
+                        filename=os.path.basename(png_file),
+                    )
+                    metadata = {
+                        "runId": self.context.run.run_id,
+                        "dataflowId": os.environ.get("DATAFLOW_ID", "unknown"),
+                        "specId": os.environ.get("DATAFLOW_SPEC_ID", "unknown"),
+                        "prov": {
+                            "wasDerivedFrom": item["master"]["_id"],
+                            "wasGeneratedBy": self.version,
+                        },
+                    }
+                    self.girder._client.addMetadataToItem(png_upload["itemId"], metadata)
+                    outputs.append(png_upload["itemId"])
+
+            self.girder._client.addMetadataToItem(
+                item["master"]["_id"], {"prov": {"hadDerivation": outputs}}
+            )
