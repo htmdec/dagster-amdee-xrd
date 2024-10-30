@@ -36,14 +36,16 @@ class GirderConnection(ConfigurableResource):
     def list_folder(self, folder_id):
         return list(self._client.listFolder(folder_id))
 
-    def folder_by_name(self, parentId, name):
-        folders = self._client.get(
-            "folder",
-            parameters={"name": name, "parentType": "folder", "parentId": parentId},
-        )
-        if not folders:
-            return None
-        return folders[0]
+    def sample_by_name(self, name):
+        for sample_folder in self.sample_folders():
+            if sample_folder["name"] == name:
+                return sample_folder
+
+    def sample_folders(self):
+        date_folders = self.list_folder(os.environ["DATAFLOW_SRC_FOLDER_ID"])
+        for date_folder in date_folders:
+            for sample_folder in self.list_folder(date_folder["_id"]):
+                yield sample_folder
 
     def master_files(self, folder_id):
         items = self.list_item(folder_id)
@@ -75,6 +77,12 @@ class GirderConnection(ConfigurableResource):
     def upload_file_to_folder(
         self, folder_id, file_path, mime_type=None, filename=None
     ):
+        filename = os.path.basename(file_path) if filename is None else filename
+        if item := next(self._client.listItem(folder_id, name=filename), None):
+            return self._client.uploadFileToItem(
+                item["_id"], file_path, mimeType=mime_type, filename=filename
+            )
+
         return self._client.uploadFileToFolder(
             folder_id, file_path, mimeType=mime_type, filename=filename
         )

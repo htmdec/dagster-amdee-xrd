@@ -42,11 +42,14 @@ def xrd_samples(
     context: AssetExecutionContext, girder: GirderConnection
 ) -> DataVersionsByPartition:
     result = {}
-    for sample in girder.list_folder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
-        master_files = girder.master_files(sample["_id"])
-        result[sample["name"]] = str(
-            len(master_files)
-        )  # Use the number of items as the version, for now
+    for sample_folder in girder.sample_folders():
+        master_files = girder.master_files(sample_folder["_id"])
+        unprocessed = [
+            file
+            for file in master_files
+            if not file.get("meta", {}).get("prov", {}).get("hadDerivation")
+        ]
+        result[sample_folder["name"]] = f"{len(master_files)}-{len(unprocessed)}"
 
     return DataVersionsByPartition(result)
 
@@ -68,10 +71,8 @@ observation_schedule = ScheduleDefinition(
 )
 def some_xrd_sample(context: AssetExecutionContext, girder: GirderConnection) -> None:
     context.log.info(f"Generating XRD plots for {context.partition_key}")
-    folder = girder.folder_by_name(
-        os.environ["DATAFLOW_SRC_FOLDER_ID"], context.partition_key
-    )
-    XRDAnalysis(context, folder["_id"], girder).analyze()
+    sample_folder = girder.sample_by_name(context.partition_key)
+    XRDAnalysis(context, sample_folder["_id"], girder).analyze()
 
 
 class XRDSampleConfig(Config):
@@ -97,6 +98,7 @@ executor = docker_executor.configured(
             f"DATAFLOW_DST_FOLDER_ID={os.environ['DATAFLOW_DST_FOLDER_ID']}",
         ],
         "container_kwargs": {
+            "auto_remove": True,
             "extra_hosts": {"girder.local.xarthisius.xyz": "host-gateway"}
         },
     }
@@ -116,7 +118,7 @@ def make_girder_folder_sensor(
     def folder_contents(context, girder: GirderConnection):
         new_folders = []
         context.log.info(f"Checking for new XRD samples in folder {folder_id}")
-        for folder in girder.list_folder(folder_id):
+        for folder in girder.sample_folders():
             context.log.info(f"Checking if {folder['name']} is in partition")
             if not context.instance.has_dynamic_partition(
                 partitions_def.name, folder["name"]
