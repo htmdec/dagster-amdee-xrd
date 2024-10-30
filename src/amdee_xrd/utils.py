@@ -215,7 +215,6 @@ class XRDAnalysis:
                 # Upload all generated png files
                 for png_file in glob.glob(os.path.join(tmpdir, "*.png")):
                     self.context.log.info(f"Uploading {os.path.basename(png_file)}")
-                    # TODO check if file already exists
                     png_upload = self.girder.upload_file_to_folder(
                         item["master"]["folderId"],
                         png_file,
@@ -231,8 +230,11 @@ class XRDAnalysis:
                             "wasGeneratedBy": self.version,
                         },
                     }
-                    self.girder._client.addMetadataToItem(png_upload["itemId"], metadata)
-                    outputs.append(png_upload["itemId"])
+                    if png_upload is not None:
+                        self.girder._client.addMetadataToItem(png_upload["itemId"], metadata)
+                        outputs.append(png_upload["itemId"])
+                    else:
+                        self.context.log.error(f"Failed to upload {png_file}")
 
             self.girder._client.addMetadataToItem(
                 item["master"]["_id"], {"prov": {"hadDerivation": outputs}}
