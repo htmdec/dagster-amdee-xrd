@@ -128,6 +128,13 @@ def analyze_xrd_scan(save_folder, logger):
         integrated_I, tth_bin_edges, tth_bin_centers = azimuthal_integration(
             img_preped, detector, cake_params
         )
+        # Dump csv of tth_bin_centers and integrated_I
+        np.savetxt(
+            save_file_pathname.replace("_image.png", "_integrated.csv"),
+            np.column_stack((tth_bin_centers, integrated_I)),
+            delimiter=",",
+            header="tth_bin_centers,integrated_I",
+        )
 
         # plot intengrated I
         plt.figure()
@@ -213,13 +220,21 @@ class XRDAnalysis:
                 analyze_xrd_scan(tmpdir, self.context.log)
 
                 # Upload all generated png files
-                for png_file in glob.glob(os.path.join(tmpdir, "*.png")):
-                    self.context.log.info(f"Uploading {os.path.basename(png_file)}")
-                    png_upload = self.girder.upload_file_to_folder(
+                for output_file in os.listdir(tmpdir):
+                    if output_file.endswith(".h5"):
+                        continue
+                    self.context.log.info(f"Uploading {output_file}")
+                    if output_file.endswith("png"):
+                        mime_type = "image/png"
+                    elif output_file.endswith("csv"):
+                        mime_type = "text/csv"
+                    else:
+                        mime_type = "application/octet-stream"
+                    output_upload = self.girder.upload_file_to_folder(
                         item["master"]["folderId"],
-                        png_file,
-                        mime_type="image/png",
-                        filename=os.path.basename(png_file),
+                        os.path.join(tmpdir, output_file),
+                        mime_type=mime_type,
+                        filename=output_file,
                     )
                     metadata = {
                         "runId": self.context.run.run_id,
@@ -230,11 +245,13 @@ class XRDAnalysis:
                             "wasGeneratedBy": self.version,
                         },
                     }
-                    if png_upload is not None:
-                        self.girder._client.addMetadataToItem(png_upload["itemId"], metadata)
-                        outputs.append(png_upload["itemId"])
+                    if output_upload is not None:
+                        self.girder._client.addMetadataToItem(
+                            output_upload["itemId"], metadata
+                        )
+                        outputs.append(output_upload["itemId"])
                     else:
-                        self.context.log.error(f"Failed to upload {png_file}")
+                        self.context.log.error(f"Failed to upload {output_file}")
 
             self.girder._client.addMetadataToItem(
                 item["master"]["_id"], {"prov": {"hadDerivation": outputs}}
