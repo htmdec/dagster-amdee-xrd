@@ -40,10 +40,7 @@ class GirderConnection(ConfigurableResource):
                 return sample_folder
 
     def sample_folders(self):
-        date_folders = self.list_folder(os.environ["DATAFLOW_SRC_FOLDER_ID"])
-        for date_folder in date_folders:
-            for sample_folder in self.list_folder(date_folder["_id"]):
-                yield sample_folder
+        return self._client.get("/amdee/xrd", parameters={"folderId": os.environ["DATAFLOW_SRC_FOLDER_ID"]})
 
     def master_files(self, folder_id):
         items = self.list_item(folder_id)

@@ -147,9 +147,9 @@ def analyze_xrd_scan(save_folder, logger):
 
 
 class XRDAnalysis:
-    def __init__(self, dagster_context, folder_id, girder_connection):
+    def __init__(self, dagster_context, folder_ids, girder_connection):
         self.context = dagster_context
-        self.folder_id = folder_id
+        self.folder_ids = folder_ids
         self.girder = girder_connection
         self._items = None
 
@@ -157,19 +157,24 @@ class XRDAnalysis:
     def items(self):
         if self._items is None:
             self._items = {}
-            for _ in self.girder.list_item(self.folder_id):
-                if _["name"].endswith("_master.h5"):
-                    prefix = _["name"].split("_master")[0]
-                elif "_data_" in _["name"]:
-                    prefix = _["name"].split("_data_")[0]
+            for folder_id in self.folder_ids:
+                for _ in self.girder.list_item(folder_id):
+                    if not _["name"].endswith(".h5"):
+                        continue
+                    if _["name"].endswith("_master.h5"):
+                        prefix = _["name"].split("_master")[0]
+                    elif "_data_" in _["name"]:
+                        prefix = _["name"].split("_data_")[0]
+                    else:
+                        continue
 
-                if prefix not in self._items:
-                    self._items[prefix] = {"master": None, "data": []}
+                    if prefix not in self._items:
+                        self._items[prefix] = {"master": None, "data": []}
 
-                if _["name"].endswith("_master.h5"):
-                    self._items[prefix]["master"] = _
-                else:
-                    self._items[prefix]["data"].append(_)
+                    if _["name"].endswith("_master.h5"):
+                        self._items[prefix]["master"] = _
+                    else:
+                        self._items[prefix]["data"].append(_)
         return self._items
 
     @property
