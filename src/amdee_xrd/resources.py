@@ -19,7 +19,6 @@ from pydantic import PrivateAttr
 class GirderCredentials(ConfigurableResource):
     api_url: str
     api_key: str
-    token: str
 
 
 class GirderConnection(ConfigurableResource):
@@ -29,8 +28,7 @@ class GirderConnection(ConfigurableResource):
     @contextmanager
     def yield_for_execution(self, context):
         self._client = girder_client.GirderClient(apiUrl=self.credentials.api_url)
-        self._client.token = self.credentials.token
-        # self._client.authenticate(apiKey=self.credentials.api_key)
+        self._client.authenticate(apiKey=self.credentials.api_key)
         yield self
 
     def list_folder(self, folder_id):
@@ -92,10 +90,9 @@ class GirderConnection(ConfigurableResource):
 
 
 class GirderIOManager(IOManager):
-    def __init__(self, api_url, api_key, token, source_folder_id, target_folder_id):
+    def __init__(self, api_url, api_key, source_folder_id, target_folder_id):
         self._cli = GirderClient(apiUrl=api_url)
-        # self._cli.authenticate(apiKey=api_key)
-        self._cli.token = token
+        self._cli.authenticate(apiKey=api_key)
         self.source_folder_id = source_folder_id
         self.target_folder_id = target_folder_id
 
@@ -182,7 +179,6 @@ class GirderIOManager(IOManager):
 class ConfigurableGirderIOManager(ConfigurableIOManagerFactory):
     api_key: str
     api_url: str
-    token: str
     source_folder_id: str
     target_folder_id: str
 
@@ -190,7 +186,6 @@ class ConfigurableGirderIOManager(ConfigurableIOManagerFactory):
         return GirderIOManager(
             self.api_url,
             self.api_key,
-            self.token,
             self.source_folder_id,
             self.target_folder_id,
         )
