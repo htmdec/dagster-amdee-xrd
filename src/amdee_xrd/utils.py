@@ -55,23 +55,24 @@ class XRDAnalysis:
         if self._items is None:
             self._items = {}
             for folder_id in self.folder_ids:
-                for _ in self.girder.list_item(folder_id):
-                    if not _["name"].endswith(".h5"):
-                        continue
-                    if _["name"].endswith("_master.h5"):
-                        prefix = _["name"].split("_master")[0]
-                    elif "_data_" in _["name"]:
-                        prefix = _["name"].split("_data_")[0]
-                    else:
-                        continue
+                for raw_data_folder in self.girder.list_folder(folder_id, name="raw"):
+                    for _ in self.girder.list_item(raw_data_folder["_id"]):
+                        if not _["name"].endswith(".h5"):
+                            continue
+                        if _["name"].endswith("_master.h5"):
+                            prefix = _["name"].split("_master")[0]
+                        elif "_data_" in _["name"]:
+                            prefix = _["name"].split("_data_")[0]
+                        else:
+                            continue
 
-                    if prefix not in self._items:
-                        self._items[prefix] = {"master": None, "data": []}
+                        if prefix not in self._items:
+                            self._items[prefix] = {"master": None, "data": []}
 
-                    if _["name"].endswith("_master.h5"):
-                        self._items[prefix]["master"] = _
-                    else:
-                        self._items[prefix]["data"].append(_)
+                        if _["name"].endswith("_master.h5"):
+                            self._items[prefix]["master"] = _
+                        else:
+                            self._items[prefix]["data"].append(_)
         return self._items
 
     @property

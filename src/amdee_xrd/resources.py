@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import urllib.parse as parse
 from contextlib import contextmanager
 
@@ -21,6 +22,11 @@ class GirderCredentials(ConfigurableResource):
     api_key: str
 
 
+NAME_REGEX = re.compile(
+    r"^([a-zA-Z0-9-]+)_\d+_\d+_([a-zA-Z0-9-]+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})$"
+)
+
+
 class GirderConnection(ConfigurableResource):
     credentials: GirderCredentials
     _client: girder_client.GirderClient = PrivateAttr()
@@ -31,8 +37,8 @@ class GirderConnection(ConfigurableResource):
         self._client.authenticate(apiKey=self.credentials.api_key)
         yield self
 
-    def list_folder(self, folder_id):
-        return list(self._client.listFolder(folder_id))
+    def list_folder(self, folder_id, name=None):
+        return list(self._client.listFolder(folder_id, name=name))
 
     def sample_by_name(self, name):
         for sample_folder in self.sample_folders():
@@ -40,11 +46,22 @@ class GirderConnection(ConfigurableResource):
                 return sample_folder
 
     def sample_folders(self):
-        return self._client.get("/amdee/xrd", parameters={"folderId": os.environ["DATAFLOW_SRC_FOLDER_ID"]})
+        result = {}
+        for folder in self._client.listFolder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
+            if match := NAME_REGEX.match(folder["name"]):
+                sample_id, igsn, edate, etime, esecs, etz = match.groups()
+                if "igsn" not in result:
+                    result[igsn] = {"folders": set()}
+                result[igsn]["folders"].add(folder["_id"])
+        return result
 
     def master_files(self, folder_id):
-        items = self.list_item(folder_id)
-        return [item for item in items if item["name"].endswith("_master.h5")]
+        result = []
+        for raw_data_folder in self._client.listFolder(folder_id, name="raw"):
+            for item in self._client.listItem(raw_data_folder["_id"]):
+                if item["name"].endswith("_master.h5"):
+                    result.append(item)
+        return result
 
     def folder_details(self, folder_id):
         return self._client.get(f"/folder/{folder_id}/details")
