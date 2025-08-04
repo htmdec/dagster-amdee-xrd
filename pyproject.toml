@@ -21,6 +21,7 @@ dependencies = [
     "fabio",
     "pyfai",
     "pyopencl",
+    "scikit-image",
 ]
 requires-python = ">=3.12"
 readme = "README.md"

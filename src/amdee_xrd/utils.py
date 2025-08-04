@@ -1,3 +1,4 @@
+import csv
 import glob
 import os
 import tempfile
@@ -5,8 +6,50 @@ from importlib.metadata import version
 
 import fabio
 import matplotlib.pyplot as plt
+import numpy as np
 from pyFAI.detectors import Eiger2CdTe_1M
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+from skimage import exposure
+
+
+def log_scale_and_contrast(
+    intensity_array: np.ndarray, saturation_percent: float
+) -> np.ndarray:
+    """
+    Applies a logarithmic scale and adjusts the contrast of a 2D array.
+
+    Args:
+        intensity_array (np.ndarray): The input 2D numpy array (e.g., an image).
+                                      Values should be non-negative.
+        saturation_percent (float): The percentage of pixels to saturate at both the low and high ends.
+                                    For example, 0.2 means saturate the bottom 0.2% and top 0.2%.
+
+    Returns:
+        np.ndarray: The processed array with log scaling and contrast adjustment.
+    """
+    if np.min(intensity_array) < 0:
+        print("Warning: Input array contains negative values. Clipping to 0.")
+        intensity_array = np.clip(intensity_array, 0, None)
+
+    print("Applying logarithmic scale...")
+    log_scaled_array = np.log1p(intensity_array)
+
+    lower_percentile = saturation_percent
+    higher_percentile = 100 - saturation_percent
+
+    print(
+        f"Calculating intensity values at {lower_percentile}% and {higher_percentile}% percentiles..."
+    )
+    p_low, p_high = np.percentile(
+        log_scaled_array, (lower_percentile, higher_percentile)
+    )
+
+    print("Rescaling intensity for contrast adjustment...")
+    contrast_adjusted_array = exposure.rescale_intensity(
+        log_scaled_array, in_range=(p_low, p_high)
+    )
+
+    return contrast_adjusted_array
 
 
 def analyze_xrd_scan(save_folder, logger):
@@ -41,6 +84,21 @@ def analyze_xrd_scan(save_folder, logger):
             fig.tight_layout()
             fig.savefig(save_file_pathname, dpi=150)
             plt.close(fig)
+
+        with plt.rc_context({"interactive": False}):
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+            ax.imshow(log_scale_and_contrast(image.data, 0.2), cmap="viridis")
+            fig.tight_layout()
+            fig.savefig(save_file_pathname.replace("_xrd.png", "_scan.png"), dpi=150)
+            plt.close(fig)
+
+        # dump the two theta and intensity data to a CSV file
+        csv_file_pathname = save_file_pathname.replace("_xrd.png", "_xrd.csv")
+        with open(csv_file_pathname, "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Two Theta (degrees)", "Intensity"])
+            for tt, intensity_value in zip(two_theta, intensity):
+                writer.writerow([tt, intensity_value])
 
 
 class XRDAnalysis:
@@ -147,6 +205,7 @@ class XRDAnalysis:
                             "wasDerivedFrom": item["master"]["_id"],
                             "wasGeneratedBy": self.version,
                         },
+                        "igsn": self.context.partition_key,
                     }
                     if output_upload is not None:
                         self.girder._client.addMetadataToItem(
@@ -157,5 +216,9 @@ class XRDAnalysis:
                         self.context.log.error(f"Failed to upload {output_file}")
 
             self.girder._client.addMetadataToItem(
-                item["master"]["_id"], {"prov": {"hadDerivation": outputs}}
+                item["master"]["_id"],
+                {
+                    "prov": {"hadDerivation": outputs},
+                    "igsn": self.context.partition_key,
+                },
             )
