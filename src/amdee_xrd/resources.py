@@ -50,17 +50,22 @@ class GirderConnection(ConfigurableResource):
         for folder in self._client.listFolder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
             if match := NAME_REGEX.match(folder["name"]):
                 sample_id, igsn, edate, etime, esecs, etz = match.groups()
-                if "igsn" not in result:
+                if igsn not in result:
                     result[igsn] = {"folders": set()}
                 result[igsn]["folders"].add(folder["_id"])
         return result
 
     def master_files(self, folder_id):
         result = []
-        for raw_data_folder in self._client.listFolder(folder_id, name="raw"):
-            for item in self._client.listItem(raw_data_folder["_id"]):
+
+        def recurse_find(folder_id):
+            for item in self._client.listItem(folder_id):
                 if item["name"].endswith("_master.h5"):
                     result.append(item)
+            for subfolder in self._client.listFolder(folder_id):
+                recurse_find(subfolder["_id"])
+
+        recurse_find(folder_id)
         return result
 
     def folder_details(self, folder_id):

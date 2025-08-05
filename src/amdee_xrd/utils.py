@@ -110,27 +110,32 @@ class XRDAnalysis:
 
     @property
     def items(self):
+        def recurse_find(fid, root_id=None):
+            for folder in self.girder.list_folder(fid):
+                recurse_find(folder["_id"], root_id=root_id)
+
+            for item in self.girder.list_item(fid):
+                if item["name"].endswith(".h5"):
+                    if item["name"].endswith("_master.h5"):
+                        prefix = item["name"].split("_master")[0]
+                    elif "_data_" in item["name"]:
+                        prefix = item["name"].split("_data_")[0]
+                    else:
+                        continue
+
+                    prefix = f"{root_id}-{prefix}"
+                    if prefix not in self._items:
+                        self._items[prefix] = {"master": None, "data": []}
+
+                    if item["name"].endswith("_master.h5"):
+                        self._items[prefix]["master"] = item
+                    else:
+                        self._items[prefix]["data"].append(item)
+
         if self._items is None:
             self._items = {}
             for folder_id in self.folder_ids:
-                for raw_data_folder in self.girder.list_folder(folder_id, name="raw"):
-                    for _ in self.girder.list_item(raw_data_folder["_id"]):
-                        if not _["name"].endswith(".h5"):
-                            continue
-                        if _["name"].endswith("_master.h5"):
-                            prefix = _["name"].split("_master")[0]
-                        elif "_data_" in _["name"]:
-                            prefix = _["name"].split("_data_")[0]
-                        else:
-                            continue
-
-                        if prefix not in self._items:
-                            self._items[prefix] = {"master": None, "data": []}
-
-                        if _["name"].endswith("_master.h5"):
-                            self._items[prefix]["master"] = _
-                        else:
-                            self._items[prefix]["data"].append(_)
+                recurse_find(folder_id, root_id=folder_id)
         return self._items
 
     @property
