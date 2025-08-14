@@ -23,7 +23,7 @@ class GirderCredentials(ConfigurableResource):
 
 
 NAME_REGEX = re.compile(
-    r"^([a-zA-Z0-9-]+)_\d+_\d+_([a-zA-Z0-9-]+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})$"
+    r"^([a-zA-Z0-9-]+)_([a-zA-Z0-9-]+)_\d+_\d+_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})$"
 )
 
 
@@ -49,7 +49,7 @@ class GirderConnection(ConfigurableResource):
         result = {}
         for folder in self._client.listFolder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
             if match := NAME_REGEX.match(folder["name"]):
-                sample_id, igsn, edate, etime, esecs, etz = match.groups()
+                igsn, sample_id, edate, etime, esecs, etz = match.groups()
                 if igsn not in result:
                     result[igsn] = {"folders": set()}
                 result[igsn]["folders"].add(folder["_id"])
