@@ -23,7 +23,7 @@ class GirderCredentials(ConfigurableResource):
 
 
 NAME_REGEX = re.compile(
-    r"^([a-zA-Z0-9-]+)_([a-zA-Z0-9-]+)_\d+_\d+_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})$"
+    r"^([a-zA-Z0-9-]+)_([a-zA-Z0-9-]+)_\d+_\d+_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})?$"
 )
 
 
