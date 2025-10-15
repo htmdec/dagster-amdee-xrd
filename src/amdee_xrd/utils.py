@@ -220,10 +220,22 @@ class XRDAnalysis:
                     else:
                         self.context.log.error(f"Failed to upload {output_file}")
 
+            # Add provenance metadata to the master and data files
             self.girder._client.addMetadataToItem(
                 item["master"]["_id"],
                 {
-                    "prov": {"hadDerivation": outputs},
+                    "prov": {
+                        "hadDerivation": outputs,
+                        "hasPart": [_["_id"] for _ in item["data"]],
+                    },
                     "igsn": self.context.partition_key,
                 },
             )
+            for data_file in item["data"]:
+                self.girder._client.addMetadataToItem(
+                    data_file["_id"],
+                    {
+                        "prov": {"isPartOf": item["master"]["_id"]},
+                        "igsn": self.context.partition_key,
+                    },
+                )

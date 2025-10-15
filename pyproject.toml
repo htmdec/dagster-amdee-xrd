@@ -17,6 +17,7 @@ dependencies = [
     "setuptools>=75.1.0",
     "dagster",
     "dagster-docker",
+    "girder-client",
     "scipy",
     "fabio",
     "pyfai",

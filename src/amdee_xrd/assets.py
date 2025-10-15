@@ -19,7 +19,7 @@ from dagster_docker import docker_executor
 from .resources import GirderConnection
 from .utils import XRDAnalysis
 
-warnings.filterwarnings("ignore", category=dagster.ExperimentalWarning)
+# warnings.filterwarnings("ignore", category=dagster.ExperimentalWarning)
 xrd_samples_partitions_def = DynamicPartitionsDefinition(name="xrd_samples")
 
 
