@@ -69,7 +69,7 @@ observation_job = define_asset_job(
 
 observation_schedule = ScheduleDefinition(
     name="observation_schedule",
-    cron_schedule="* * * * *",
+    cron_schedule="*/15 * * * *",
     job=observation_job,
 )
 
