@@ -71,7 +71,7 @@ def analyze_xrd_scan(save_folder, logger):
             detector=Eiger2CdTe_1M(orientation=3),
             wavelength=5.142439e-11,
         )
-        two_theta, intensity = ai.integrate1d(image.data, npt=1000)
+        two_theta, intensity = ai.integrate1d(image.data, npt=1000, unit="2th_deg")
 
         with plt.rc_context({"interactive": False}):
             fig, ax = plt.subplots(1, 1, figsize=(8, 8))
@@ -80,7 +80,7 @@ def analyze_xrd_scan(save_folder, logger):
             ax.set_ylabel("Intensity")
             ax.set_ylim(1, 500)
             ax.set_yscale("log")
-            ax.set_xlim(25, 65)
+            ax.set_xlim(10, 40)
             fig.tight_layout()
             fig.savefig(save_file_pathname, dpi=150)
             plt.close(fig)
