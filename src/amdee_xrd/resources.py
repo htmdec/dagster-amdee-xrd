@@ -1,10 +1,9 @@
 import io
 import os
-import re
 import urllib.parse as parse
 from contextlib import contextmanager
 
-import girder_client
+import requests
 from dagster import (
     ConfigurableIOManagerFactory,
     ConfigurableResource,
@@ -17,62 +16,77 @@ from girder_client import GirderClient
 from pydantic import PrivateAttr
 
 
+class GirderClientWithSession(GirderClient):
+    def __init__(
+        self,
+        host=None,
+        port=None,
+        apiRoot=None,
+        scheme=None,
+        apiUrl=None,
+        apiKey=None,
+        token=None,
+        session=None,
+        cacheSettings=None,
+        progressReporterCls=None,
+    ):
+        super().__init__(
+            host=host,
+            port=port,
+            apiRoot=apiRoot,
+            scheme=scheme,
+            apiUrl=apiUrl,
+            cacheSettings=cacheSettings,
+            progressReporterCls=progressReporterCls,
+        )
+
+        if token:
+            self.setToken(token)
+
+        if apiKey:
+            self.authenticate(apiKey=apiKey)
+
+        self._session = session
+
+
 class GirderCredentials(ConfigurableResource):
     api_url: str
     api_key: str
 
 
-NAME_REGEX = re.compile(
-    r"^([a-zA-Z0-9-]+)_([a-zA-Z0-9-]+)_\d+_\d+_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(-\d{6})?(\+\d{2}-\d{2})?$"
-)
-
-
 class GirderConnection(ConfigurableResource):
     credentials: GirderCredentials
-    _client: girder_client.GirderClient = PrivateAttr()
+    _client: GirderClientWithSession = PrivateAttr()
 
     @contextmanager
     def yield_for_execution(self, context):
-        self._client = girder_client.GirderClient(apiUrl=self.credentials.api_url)
-        self._client.authenticate(apiKey=self.credentials.api_key)
-        yield self
+        with requests.Session() as session:
+            self._client = GirderClientWithSession(
+                apiUrl=self.credentials.api_url,
+                apiKey=self.credentials.api_key,
+                session=session,
+            )
+            yield self
 
-    def list_folder(self, folder_id, name=None):
-        return list(self._client.listFolder(folder_id, name=name))
+    @property
+    def client(self):
+        if not self._client:
+            raise Exception(
+                "Girder client is not initialized. Use yield_for_execution."
+            )
+        return self._client
 
-    def sample_by_name(self, name):
-        for sample_folder in self.sample_folders():
-            if sample_folder["name"] == name:
-                return sample_folder
+    def list_partitions(self, data_type="xrd_raw", since=None):
+        parameters = {"dataType": data_type}
+        if since:
+            parameters["since"] = since
+        return self._client.get("/aimdl/partition", parameters=parameters)
 
-    def sample_folders(self):
-        result = {}
-        for folder in self._client.listFolder(os.environ["DATAFLOW_SRC_FOLDER_ID"]):
-            if match := NAME_REGEX.match(folder["name"]):
-                igsn, sample_id, edate, etime, esecs, etz = match.groups()
-                if igsn not in result:
-                    result[igsn] = {"folders": set()}
-                result[igsn]["folders"].add(folder["_id"])
-        return result
-
-    def master_files(self, folder_id):
-        result = []
-
-        def recurse_find(folder_id):
-            for item in self._client.listItem(folder_id):
-                if item["name"].endswith("_master.h5"):
-                    result.append(item)
-            for subfolder in self._client.listFolder(folder_id):
-                recurse_find(subfolder["_id"])
-
-        recurse_find(folder_id)
-        return result
-
-    def folder_details(self, folder_id):
-        return self._client.get(f"/folder/{folder_id}/details")
-
-    def list_item(self, folder_id):
-        return list(self._client.listItem(folder_id))
+    def get_partition(self, partition_key, data_type="xrd_raw"):
+        return self._client.get(
+            "/aimdl/partition/details",
+            parameters={"key": partition_key, "dataType": data_type},
+        )
 
     def get_item(self, item_id):
         return self._client.getItem(item_id)
@@ -91,14 +105,22 @@ class GirderConnection(ConfigurableResource):
         data.seek(0)
         return data
 
+    def existing_file(self, folder_id, filename):
+        for item in self._client.listItem(folder_id, name=filename):
+            return next(self._client.listFile(item["_id"]), None)
+
+    def replace_existing_file(self, fobj, file_path):
+        size = os.path.getsize(file_path)
+        with open(file_path, "rb") as stream:
+            self._client.uploadFileContents(fobj["_id"], stream, size)
+        return fobj
+
     def upload_file_to_folder(
         self, folder_id, file_path, mime_type=None, filename=None
     ):
         filename = os.path.basename(file_path) if filename is None else filename
-        if item := next(self._client.listItem(folder_id, name=filename), None):
-            return self._client.uploadFileToItem(
-                item["_id"], file_path, mimeType=mime_type, filename=filename
-            )
+        if existing := self.existing_file(folder_id, filename):
+            return self.replace_existing_file(existing, file_path)
 
         return self._client.uploadFileToFolder(
             folder_id, file_path, mimeType=mime_type, filename=filename

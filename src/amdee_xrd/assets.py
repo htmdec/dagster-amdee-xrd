@@ -1,109 +1,92 @@
-import os
-import warnings
-import dagster
+import datetime
 
-from dagster import (
-    AssetExecutionContext,
-    AutomationCondition,
-    Config,
-    DataVersionsByPartition,
-    DynamicPartitionsDefinition,
-    ScheduleDefinition,
-    asset,
-    define_asset_job,
-    multiprocess_executor,
-    observable_source_asset,
-)
-from dagster_docker import docker_executor
+import dagster as dg
 
 from .resources import GirderConnection
 from .utils import XRDAnalysis
 
-# warnings.filterwarnings("ignore", category=dagster.ExperimentalWarning)
-xrd_samples_partitions_def = DynamicPartitionsDefinition(name="xrd_samples")
+experiment_partitions = dg.DynamicPartitionsDefinition(name="xrd_experiment_runs")
 
 
-@observable_source_asset(
-    io_manager_key="girder_io_manager",
-    partitions_def=xrd_samples_partitions_def,
-    description="All XRD samples available in Girder",
-)
-def raw_xrd_data(
-    context: AssetExecutionContext, girder: GirderConnection
-) -> DataVersionsByPartition:
-    result = {}
-    sample_folders = girder.sample_folders()
-    new_samples = [
-        sample_id
-        for sample_id in sample_folders.keys()
-        if sample_id
-        not in xrd_samples_partitions_def.get_partition_keys(
-            dynamic_partitions_store=context.instance
+@dg.sensor(job_name="xrd_reduction_job", minimum_interval_seconds=60)
+def girder_xrd_delta_sensor(
+    context: dg.SensorEvaluationContext, girder: GirderConnection
+):
+    """
+    Uses the 'since' kwarg to only poll for modified experiments.
+    """
+    last_poll_time = context.cursor or "1970-01-01T00:00:00.000000+00:00"
+
+    remote_updates = girder.list_partitions(data_type="xrd_raw", since=last_poll_time)
+
+    if not remote_updates:
+        return None
+
+    new_partition_keys = []
+    run_requests = []
+
+    # We'll use the current system time (or Girder server time) for the next cursor
+    # To be safe, we use the timestamp of the latest 'updated' file if available,
+    # but here we'll use the execution time minus a small buffer for safety.
+    new_cursor = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)
+    ).isoformat()
+
+    existing_partitions = context.instance.get_dynamic_partitions(
+        experiment_partitions.name
+    )
+
+    for partition_key, checksum in remote_updates.items():
+        if partition_key not in existing_partitions:
+            new_partition_keys.append(partition_key)
+            existing_partitions.append(partition_key)  # Avoid dups in this loop
+
+        run_requests.append(
+            dg.RunRequest(partition_key=partition_key, tags={"data_checksum": checksum})
         )
-    ]
-    if new_samples:
+
+    if new_partition_keys:
         context.instance.add_dynamic_partitions(
-            xrd_samples_partitions_def.name, new_samples
+            experiment_partitions.name, new_partition_keys
         )
 
-    for sample_id, meta in sample_folders.items():
-        master_files = []
-        for folder_id in meta["folders"]:
-            master_files += girder.master_files(folder_id)
-
-        unprocessed = [
-            file
-            for file in master_files
-            if not file.get("meta", {}).get("prov", {}).get("hadDerivation")
-        ]
-        result[sample_id] = f"{len(master_files)}-{len(unprocessed)}"
-
-    return DataVersionsByPartition(result)
+    context.update_cursor(new_cursor)
+    return run_requests
 
 
-observation_job = define_asset_job(
-    "observation_job",
-    selection=[raw_xrd_data],
-    executor_def=multiprocess_executor,
+@dg.asset(
+    partitions_def=experiment_partitions,
 )
+def xrd_data_reduction(context: dg.AssetExecutionContext, girder: GirderConnection):
+    partition_key = context.partition_key
+    items = girder.get_partition(partition_key)
 
-observation_schedule = ScheduleDefinition(
-    name="observation_schedule",
-    cron_schedule="*/15 * * * *",
-    job=observation_job,
-)
+    if not items:
+        return
+
+    # there are two file types: _master.h5 and _data_*.h5. We need to iterate over _master files
+    # and find the corresponding _data_ files for processing. They share a common prefix
+    # scan_point_<n>_master.h5 and scan_point_<n>_data_<m>.h5. Group files by prefix
+    grouped_items = {}
+    for item in items:
+        try:
+            scan_no = int(item["name"].split("_")[2])
+        except (IndexError, ValueError, TypeError):
+            context.log.warning(
+                f"Skipping file with unexpected name format: {item['name']}"
+            )
+            continue
+        if scan_no not in grouped_items:
+            grouped_items[scan_no] = {"master": None, "data": []}
+        if item["name"].endswith("_master.h5"):
+            grouped_items[scan_no]["master"] = item
+        elif "_data_" in item["name"]:
+            grouped_items[scan_no]["data"].append(item)
+
+    for prefix, group in grouped_items.items():
+        XRDAnalysis(context, group, girder).analyze()
 
 
-@asset(
-    io_manager_key="girder_io_manager",
-    partitions_def=xrd_samples_partitions_def,
-    deps=[raw_xrd_data],
-    automation_condition=AutomationCondition.any_deps_updated()
-    | AutomationCondition.missing(),
-)
-def xrd_samples(context: AssetExecutionContext, girder: GirderConnection) -> None:
-    context.log.info(f"Generating XRD plots for {context.partition_key}")
-    sample_folders = girder.sample_folders()[context.partition_key]
-    XRDAnalysis(context, sample_folders["folders"], girder).analyze()
-
-
-class XRDSampleConfig(Config):
-    folder_id: str
-
-
-executor = docker_executor.configured(
-    {
-        "env_vars": [
-            f"GIRDER_API_KEY={os.environ['GIRDER_API_KEY']}",
-            f"GIRDER_API_URL={os.environ['GIRDER_API_URL']}",
-            f"DATAFLOW_ID={os.environ['DATAFLOW_ID']}",
-            f"DATAFLOW_SPEC_ID={os.environ['DATAFLOW_SPEC_ID']}",
-            f"DATAFLOW_SRC_FOLDER_ID={os.environ['DATAFLOW_SRC_FOLDER_ID']}",
-            f"DATAFLOW_DST_FOLDER_ID={os.environ['DATAFLOW_DST_FOLDER_ID']}",
-        ],
-        "container_kwargs": {
-            "auto_remove": True,
-            "extra_hosts": {"girder.local.xarthisius.xyz": "host-gateway"},
-        },
-    }
+xrd_reduction_job = dg.define_asset_job(
+    name="xrd_reduction_job", selection=dg.AssetSelection.assets(xrd_data_reduction)
 )

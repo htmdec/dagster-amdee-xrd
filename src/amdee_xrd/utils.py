@@ -1,5 +1,6 @@
 import csv
 import glob
+import json
 import os
 import tempfile
 from importlib.metadata import version
@@ -10,6 +11,16 @@ import numpy as np
 from pyFAI.detectors import Eiger2CdTe_1M
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from skimage import exposure
+
+_VEGA_SPEC = {
+    "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+    "width": "container",
+    "mark": "line",
+    "encoding": {
+        "x": {"field": "x", "title": "Angle 2𝜃", "type": "quantitative"},
+        "y": {"field": "y", "title": "Intensity", "type": "quantitative"},
+    },
+}
 
 
 def log_scale_and_contrast(
@@ -102,41 +113,11 @@ def analyze_xrd_scan(save_folder, logger):
 
 
 class XRDAnalysis:
-    def __init__(self, dagster_context, folder_ids, girder_connection):
+    def __init__(self, dagster_context, items, girder_connection):
         self.context = dagster_context
-        self.folder_ids = folder_ids
         self.girder = girder_connection
-        self._items = None
-
-    @property
-    def items(self):
-        def recurse_find(fid, root_id=None):
-            for folder in self.girder.list_folder(fid):
-                recurse_find(folder["_id"], root_id=root_id)
-
-            for item in self.girder.list_item(fid):
-                if item["name"].endswith(".h5"):
-                    if item["name"].endswith("_master.h5"):
-                        prefix = item["name"].split("_master")[0]
-                    elif "_data_" in item["name"]:
-                        prefix = item["name"].split("_data_")[0]
-                    else:
-                        continue
-
-                    prefix = f"{root_id}-{prefix}"
-                    if prefix not in self._items:
-                        self._items[prefix] = {"master": None, "data": []}
-
-                    if item["name"].endswith("_master.h5"):
-                        self._items[prefix]["master"] = item
-                    else:
-                        self._items[prefix]["data"].append(item)
-
-        if self._items is None:
-            self._items = {}
-            for folder_id in self.folder_ids:
-                recurse_find(folder_id, root_id=folder_id)
-        return self._items
+        self.master = items["master"]
+        self.data = items["data"]
 
     @property
     def version(self):
@@ -153,89 +134,81 @@ class XRDAnalysis:
         return False
 
     def analyze(self):
-        for item in self.items.values():
-            if item["master"] is None:
-                self.context.log.error(f"No master file found {item}")
-                continue
-
-            if item["master"].get("meta", {}).get("prov", {}).get("hadDerivation"):
-                if self.check_code_version(
-                    item["master"]["meta"]["prov"]["hadDerivation"]
-                ):
-                    self.context.log.info(
-                        f"Skipping {item['master']['name']} as it has already been analyzed"
-                    )
-                    continue
-
-            outputs = []
-            # Create a temporary directory
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Download the master file
-                master_file = self.girder.get_stream(item["master"]["_id"])
-                with open(os.path.join(tmpdir, item["master"]["name"]), "wb") as f:
-                    f.write(master_file.read())
-                # Download the data files
-                for data_file in item["data"]:
-                    data = self.girder.get_stream(data_file["_id"])
-                    with open(os.path.join(tmpdir, data_file["name"]), "wb") as f:
-                        f.write(data.read())
-                # Perform the analysis
+        if self.master.get("meta", {}).get("prov", {}).get("hadDerivation"):
+            if self.check_code_version(self.master["meta"]["prov"]["hadDerivation"]):
                 self.context.log.info(
-                    f"Processing {item['master']['name']} in {tmpdir}"
+                    f"Skipping {self.master['name']} as it has already been analyzed"
                 )
-                analyze_xrd_scan(tmpdir, self.context.log)
+                return
+        igsn = self.context.partition_key.split("//")[0]
+        outputs = []
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Download the master file
+            master_file = self.girder.get_stream(self.master["_id"])
+            with open(os.path.join(tmpdir, self.master["name"]), "wb") as f:
+                f.write(master_file.read())
+            # Download the data files
+            for data_file in self.data:
+                data = self.girder.get_stream(data_file["_id"])
+                with open(os.path.join(tmpdir, data_file["name"]), "wb") as f:
+                    f.write(data.read())
+            # Perform the analysis
+            self.context.log.info(f"Processing {self.master['name']} in {tmpdir}")
+            analyze_xrd_scan(tmpdir, self.context.log)
 
-                # Upload all generated png files
-                for output_file in os.listdir(tmpdir):
-                    if output_file.endswith(".h5"):
-                        continue
-                    self.context.log.info(f"Uploading {output_file}")
-                    if output_file.endswith("png"):
-                        mime_type = "image/png"
-                    elif output_file.endswith("csv"):
-                        mime_type = "text/csv"
-                    else:
-                        mime_type = "application/octet-stream"
-                    output_upload = self.girder.upload_file_to_folder(
-                        item["master"]["folderId"],
-                        os.path.join(tmpdir, output_file),
-                        mime_type=mime_type,
-                        filename=output_file,
-                    )
-                    metadata = {
-                        "runId": self.context.run.run_id,
-                        "dataflowId": os.environ.get("DATAFLOW_ID", "unknown"),
-                        "specId": os.environ.get("DATAFLOW_SPEC_ID", "unknown"),
-                        "prov": {
-                            "wasDerivedFrom": item["master"]["_id"],
-                            "wasGeneratedBy": self.version,
-                        },
-                        "igsn": self.context.partition_key,
-                    }
-                    if output_upload is not None:
-                        self.girder._client.addMetadataToItem(
-                            output_upload["itemId"], metadata
-                        )
-                        outputs.append(output_upload["itemId"])
-                    else:
-                        self.context.log.error(f"Failed to upload {output_file}")
-
-            # Add provenance metadata to the master and data files
-            self.girder._client.addMetadataToItem(
-                item["master"]["_id"],
-                {
+            # Upload all generated png files
+            for output_file in os.listdir(tmpdir):
+                if output_file.endswith(".h5"):
+                    continue
+                self.context.log.info(f"Uploading {output_file}")
+                metadata = {
+                    "runId": self.context.run.run_id,
+                    "dataflowId": os.environ.get("DATAFLOW_ID", "unknown"),
+                    "specId": os.environ.get("DATAFLOW_SPEC_ID", "unknown"),
                     "prov": {
-                        "hadDerivation": outputs,
-                        "hasPart": [_["_id"] for _ in item["data"]],
+                        "wasDerivedFrom": self.master["_id"],
+                        "wasGeneratedBy": self.version,
                     },
-                    "igsn": self.context.partition_key,
+                    "igsn": igsn,
+                }
+                if output_file.endswith("png"):
+                    mime_type = "image/png"
+                elif output_file.endswith("csv"):
+                    mime_type = "text/csv"
+                    metadata["vega"] = json.dumps(_VEGA_SPEC)
+                else:
+                    mime_type = "application/octet-stream"
+                output_upload = self.girder.upload_file_to_folder(
+                    self.master["folderId"],
+                    os.path.join(tmpdir, output_file),
+                    mime_type=mime_type,
+                    filename=output_file,
+                )
+                if output_upload is not None:
+                    self.girder._client.addMetadataToItem(
+                        output_upload["itemId"], metadata
+                    )
+                    outputs.append(output_upload["itemId"])
+                else:
+                    self.context.log.error(f"Failed to upload {output_file}")
+
+        # Add provenance metadata to the master and data files
+        self.girder._client.addMetadataToItem(
+            self.master["_id"],
+            {
+                "prov": {
+                    "hadDerivation": outputs,
+                    "hasPart": [_["_id"] for _ in self.data],
+                },
+                "igsn": igsn,
+            },
+        )
+        for data_file in self.data:
+            self.girder._client.addMetadataToItem(
+                data_file["_id"],
+                {
+                    "prov": {"isPartOf": self.master["_id"]},
+                    "igsn": igsn,
                 },
             )
-            for data_file in item["data"]:
-                self.girder._client.addMetadataToItem(
-                    data_file["_id"],
-                    {
-                        "prov": {"isPartOf": item["master"]["_id"]},
-                        "igsn": self.context.partition_key,
-                    },
-                )
