@@ -11,8 +11,8 @@ all_assets = load_assets_from_modules([assets])
 
 defs = Definitions(
     assets=all_assets,
-    jobs=[assets.observation_job],
-    schedules=[assets.observation_schedule],
+    sensors=[assets.girder_xrd_delta_sensor],
+    jobs=[assets.xrd_reduction_job],
     resources={
         "fs_io_manager": FilesystemIOManager(),
         "girder_io_manager": ConfigurableGirderIOManager(

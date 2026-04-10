@@ -8,7 +8,7 @@ code_location_name = "amdee_xrd"
 
 [project]
 name = "amdee_xrd"
-version = "0.1.0"
+version = "0.1.4"
 description = "g"
 authors = [
     {name = "Kacper Kowalik (Xarthisius)", email = "xarthisius.kk@gmail.com"},
@@ -17,11 +17,12 @@ dependencies = [
     "setuptools>=75.1.0",
     "dagster",
     "dagster-docker",
-    "h5py",
-    "hdf5plugin",
-    "matplotlib",
-    "palettable",
+    "girder-client",
     "scipy",
+    "fabio",
+    "pyfai",
+    "pyopencl",
+    "scikit-image",
 ]
 requires-python = ">=3.12"
 readme = "README.md"
