@@ -102,8 +102,23 @@ def xrd_data_reduction(context: dg.AssetExecutionContext, girder: GirderConnecti
         elif "_data_" in item["name"]:
             grouped_items[scan_no]["data"].append(item)
 
+    failed_scans = []
     for prefix, group in grouped_items.items():
+        if not group["master"]:
+            context.log.warning(f"Missing master file for scan point {prefix}")
+            failed_scans.append(prefix)
+            continue
+        if not group["data"]:
+            context.log.warning(f"Missing data files for scan point {prefix}")
+            failed_scans.append(prefix)
+            continue
+
         XRDAnalysis(context, group, girder).analyze()
+
+    if failed_scans:
+        return dg.MaterializeResult(
+            metadata={"failed_scans": dg.MetadataValue.json({"scan_no": failed_scans})}
+        )
 
 
 xrd_reduction_job = dg.define_asset_job(
