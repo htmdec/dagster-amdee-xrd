@@ -5,6 +5,12 @@ import dagster as dg
 from .resources import GirderConnection
 from .utils import XRDAnalysis
 
+_ACTIVE_RUN_STATUSES = [
+    dg.DagsterRunStatus.QUEUED,
+    dg.DagsterRunStatus.STARTING,
+    dg.DagsterRunStatus.STARTED,
+]
+
 experiment_partitions = dg.DynamicPartitionsDefinition(name="xrd_experiment_runs")
 
 
@@ -40,6 +46,19 @@ def girder_xrd_delta_sensor(
         if partition_key not in existing_partitions:
             new_partition_keys.append(partition_key)
             existing_partitions.append(partition_key)  # Avoid dups in this loop
+
+        active_runs = context.instance.get_runs(
+            filters=dg.RunsFilter(
+                job_name="xrd_reduction_job",
+                statuses=_ACTIVE_RUN_STATUSES,
+                tags={"dagster/partition": partition_key},
+            )
+        )
+        if active_runs:
+            context.log.debug(
+                f"Skipping partition {partition_key!r}: run {active_runs[0].run_id} is already active."
+            )
+            continue
 
         run_requests.append(
             dg.RunRequest(partition_key=partition_key, tags={"data_checksum": checksum})
