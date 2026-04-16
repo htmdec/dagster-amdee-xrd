@@ -23,6 +23,19 @@ _VEGA_SPEC = {
 }
 
 
+def _get_data_type(filename):
+    data_type = None
+    if filename.startswith("scan_point_") and (
+        filename.endswith("xrd.csv") or filename.endswith("xrd.png")
+    ):
+        data_type = "xrd_derived"
+    elif filename.startswith("xrd_calibrant_") and (
+        filename.endswith(".csv") or filename.endswith(".png")
+    ):
+        data_type = "xrd_calibrant_derived"
+    return data_type
+
+
 def log_scale_and_contrast(
     intensity_array: np.ndarray, saturation_percent: float
 ) -> np.ndarray:
@@ -172,6 +185,9 @@ class XRDAnalysis:
                     },
                     "igsn": igsn,
                 }
+                if data_type := _get_data_type(output_file):
+                    metadata["data_type"] = data_type
+
                 if output_file.endswith("png"):
                     mime_type = "image/png"
                 elif output_file.endswith("csv"):
