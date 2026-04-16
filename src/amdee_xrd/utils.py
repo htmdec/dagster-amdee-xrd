@@ -25,13 +25,10 @@ _VEGA_SPEC = {
 
 def _get_data_type(filename):
     data_type = None
-    if filename.startswith("scan_point_") and (
-        filename.endswith("xrd.csv") or filename.endswith("xrd.png")
-    ):
+    correct_extension = filename.endswith(".csv") or filename.endswith(".png")
+    if filename.startswith("scan_point_") and correct_extension:
         data_type = "xrd_derived"
-    elif filename.startswith("xrd_calibrant_") and (
-        filename.endswith(".csv") or filename.endswith(".png")
-    ):
+    elif filename.startswith("xrd_calibrant_") and correct_extension:
         data_type = "xrd_calibrant_derived"
     return data_type
 
