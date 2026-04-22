@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import urllib.parse as parse
 from contextlib import contextmanager
 
@@ -49,6 +50,10 @@ class GirderClientWithSession(GirderClient):
         self._session = session
 
 
+_girder_client_cache: dict[tuple, "GirderClientWithSession"] = {}
+_girder_client_cache_lock = threading.Lock()
+
+
 class GirderCredentials(ConfigurableResource):
     api_url: str
     api_key: str
@@ -58,15 +63,23 @@ class GirderConnection(ConfigurableResource):
     credentials: GirderCredentials
     _client: GirderClientWithSession = PrivateAttr()
 
+    def _make_client(self):
+        session = requests.Session()
+        return GirderClientWithSession(
+            apiUrl=self.credentials.api_url,
+            apiKey=self.credentials.api_key,
+            session=session,
+        )
+
     @contextmanager
     def yield_for_execution(self, context):
-        with requests.Session() as session:
-            self._client = GirderClientWithSession(
-                apiUrl=self.credentials.api_url,
-                apiKey=self.credentials.api_key,
-                session=session,
-            )
-            yield self
+        key = (self.credentials.api_url, self.credentials.api_key)
+        with _girder_client_cache_lock:
+            client = _girder_client_cache.get(key)
+            if client is None or client.get("user/me") is None:
+                _girder_client_cache[key] = self._make_client()
+        self._client = _girder_client_cache[key]
+        yield self
 
     @property
     def client(self):
