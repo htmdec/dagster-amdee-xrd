@@ -150,7 +150,7 @@ class XRDAnalysis:
                     f"Skipping {self.master['name']} as it has already been analyzed"
                 )
                 return
-        igsn = self.context.partition_key.split("//")[0]
+        igsn, experiment_date = self.context.partition_key.split("//")
         outputs = []
         # Create a temporary directory
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,6 +181,7 @@ class XRDAnalysis:
                         "wasGeneratedBy": self.version,
                     },
                     "igsn": igsn,
+                    "experiment_date": experiment_date,
                 }
                 if data_type := _get_data_type(output_file):
                     metadata["data_type"] = data_type
