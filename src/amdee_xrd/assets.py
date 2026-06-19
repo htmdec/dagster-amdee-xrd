@@ -162,15 +162,43 @@ def girder_xrd_delta_sensor(
     partitions_def=experiment_partitions,
 )
 def xrd_data_visualization(context: dg.AssetExecutionContext, girder: GirderConnection):
+    parent = girder.client.getFolder(context.partition_key)
     raw_folder_id = context.run.tags.get("girder/raw_data_folder_id")
+    if not raw_folder_id:
+        try:
+            raw_folder = next(girder.list_folders(parent["_id"], name="raw"))
+        except Exception:
+            context.log.error("No 'raw' data found")
+            return
+    else:
+        raw_folder = girder.client.getFolder(raw_folder_id)
     igsn = context.run.tags.get("igsn")
-    experiment_date = context.run.tags.get("experiment_date")
+    if not igsn:
+        igsn = parent["name"].split("_", 1)[0]
+        if not igsn_pattern.match(igsn):
+            igsn = default_igsn
 
+    experiment_date = context.run.tags.get("experiment_date")
+    if not experiment_date:
+        if m := _date_time_pattern.search(parent["name"]):
+            try:
+                date, time = m.group(1), m.group(2)
+                experiment_date = dateutil.parser.parse(
+                    f"{date} {time.replace('-', ':')}+00:00"
+                ).isoformat()
+            except Exception as ex:
+                context.log.error(f"Skipping {parent['name']} due to {ex}")
+                return
+
+    context.log.info(
+        f"Running workflow for raw_folder_id={raw_folder['_id']}, "
+        f"igsn={igsn}, experiment_date={experiment_date}"
+    )
     failed_scans = 0
     processed_scans = 0
     with tempfile.TemporaryDirectory() as tmpdir:
         source_map = {}
-        for item in girder.list_item(raw_folder_id):
+        for item in girder.list_item(raw_folder["_id"]):
             source_map[item["name"]] = item["_id"]
             girder.client.downloadItem(item["_id"], tmpdir)
 
@@ -199,7 +227,6 @@ def xrd_data_visualization(context: dg.AssetExecutionContext, girder: GirderConn
                 failed_scans += 1
 
         dagster_flow_version = version("amdee_xrd")
-        raw_folder = girder.client.getFolder(raw_folder_id)
         for output_file in glob.glob(os.path.join(tmpdir, "*.jpg")):
             filename = os.path.basename(output_file)
             source_name = filename.replace("_scan.jpg", "_master.h5")
