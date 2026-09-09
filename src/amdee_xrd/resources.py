@@ -1,3 +1,4 @@
+import json
 import threading
 from contextlib import contextmanager
 
@@ -44,6 +45,10 @@ class GirderClientWithSession(GirderClient):
 
 _girder_client_cache: dict[tuple, "GirderClientWithSession"] = {}
 _girder_client_cache_lock = threading.Lock()
+
+_FOLDER_CACHE_MAX = 5000
+_folder_cache: dict[str, dict] = {}
+_folder_cache_lock = threading.Lock()
 
 
 class GirderCredentials(ConfigurableResource):
@@ -101,6 +106,41 @@ class GirderConnection(ConfigurableResource):
         if sort:
             params["sort"] = sort
         return self._client.listResource("item", params, limit=limit, offset=offset)
+
+    def query_items(self, query, sort="_id", sortdir=1, page_size=500):
+        """Yield items matching a MongoDB query via Girder's ``item/query`` endpoint.
+
+        Pages manually (rather than via ``listResource``) so we can use a page
+        size larger than girder_client's default of 50.
+        """
+        params = {
+            "query": json.dumps(query),
+            "sort": sort,
+            "sortdir": sortdir,
+            "limit": page_size,
+            "offset": 0,
+        }
+        while True:
+            records = self._client.get("item/query", params)
+            yield from records
+            if len(records) < page_size:
+                break
+            params["offset"] += len(records)
+
+    def get_folder(self, folder_id):
+        """Return a folder document, memoized process-wide.
+
+        Folder names and parents are effectively immutable here, so caching
+        keeps repeated sensor ticks from re-fetching the same ancestors.
+        """
+        folder = _folder_cache.get(folder_id)
+        if folder is None:
+            folder = self._client.getFolder(folder_id)
+            with _folder_cache_lock:
+                if len(_folder_cache) >= _FOLDER_CACHE_MAX:
+                    _folder_cache.clear()
+                _folder_cache[folder_id] = folder
+        return folder
 
     def get_user(self):
         return self._client.get("user/me")

@@ -1,8 +1,10 @@
 import datetime
 import glob
+import json
 import os
 import re
 import tempfile
+import time
 from importlib.metadata import version
 
 import dagster as dg
@@ -69,49 +71,126 @@ def log_scale_and_contrast(
     return contrast_adjusted_array
 
 
-@dg.sensor(job_name="xrd_visualization_job", minimum_interval_seconds=600)
+# Dagster kills a sensor tick that runs longer than 60s. Both bounds below keep
+# us well inside that; whatever is left over is picked up by the next tick, as
+# the cursor only advances past folders we actually handled.
+_MAX_FOLDERS_PER_TICK = 50
+_TICK_BUDGET_SECONDS = 35
+
+# The asset only ever renders ``*_master.h5``, so that is all we need to watch.
+_MASTER_FILE_QUERY = {"name": {"$regex": r"_master\.h5$"}}
+
+
+def _object_id_floor(moment: datetime.datetime) -> str:
+    """Smallest ObjectId that could have been generated at ``moment``.
+
+    Girder's item collection is indexed on ``_id``, and ObjectIds embed their
+    creation time in the leading 4 bytes, so a range query on ``_id`` is an
+    indexed stand-in for "created after". Querying ``updated`` directly is a
+    full collection scan (~30s on this instance) and blows the tick budget.
+    """
+    return f"{int(moment.timestamp()):08x}" + "0" * 16
+
+
+def _parse_cursor(cursor: str | None) -> str:
+    """Return the exclusive ``_id`` lower bound encoded in ``cursor``."""
+    if not cursor:
+        return _object_id_floor(
+            datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        )
+    if cursor.startswith("{"):
+        return json.loads(cursor)["since_id"]
+    # Legacy cursor: a bare ISO timestamp.
+    return _object_id_floor(dateutil.parser.parse(cursor))
+
+
+def _make_cursor(since_id: str) -> str:
+    seconds = int(since_id[:8], 16)
+    since = datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc)
+    return json.dumps({"since_id": since_id, "since": since.isoformat()})
+
+
+def _experiment_date(folder_name: str) -> str | None:
+    if not (m := _date_time_pattern.search(folder_name)):
+        return None
+    date, time = m.group(1), m.group(2)
+    try:
+        return dateutil.parser.parse(
+            f"{date} {time.replace('-', ':')}+00:00"
+        ).isoformat()
+    except Exception:
+        return None
+
+
+@dg.sensor(job_name="xrd_visualization_job", minimum_interval_seconds=240)
 def girder_xrd_delta_sensor(
     context: dg.SensorEvaluationContext, girder: GirderConnection
 ):
-    last_scan_date = context.cursor or "1970-01-01T00:00:00.000000+00:00"
-    last_scan_date = dateutil.parser.parse(last_scan_date)
-    new_cursor = (
+    root_folder_id = os.environ.get("ROOT_FOLDER_ID")
+    since_id = _parse_cursor(context.cursor)
+    # Ignore the last few minutes so an in-flight upload isn't picked up halfway.
+    new_since_id = _object_id_floor(
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)
-    ).isoformat()
+    )
+
+    query = dict(_MASTER_FILE_QUERY)
+    query["_id"] = {"$gt": {"$oid": since_id}, "$lte": {"$oid": new_since_id}}
+
+    # Newly created master files, oldest first, grouped by the folder holding
+    # them (i.e. the ``raw`` folder of one experiment). Alongside each folder we
+    # keep the id of the last item seen before it showed up, so that bailing out
+    # before that folder leaves a cursor which rediscovers it next tick.
+    deadline = time.monotonic() + _TICK_BUDGET_SECONDS
+    candidates = []
+    seen_folder_ids = set()
+    last_item_id = since_id
+    for item in girder.query_items(query, sort="_id", sortdir=1):
+        if item["folderId"] not in seen_folder_ids:
+            if len(candidates) >= _MAX_FOLDERS_PER_TICK:
+                context.log.info(
+                    f"Reached the {_MAX_FOLDERS_PER_TICK} folder per-tick cap; "
+                    "the rest follows next tick."
+                )
+                new_since_id = last_item_id
+                break
+            seen_folder_ids.add(item["folderId"])
+            candidates.append((item["folderId"], last_item_id))
+        last_item_id = item["_id"]
+
+    if not candidates:
+        context.update_cursor(_make_cursor(new_since_id))
+        return dg.SkipReason("No new XRD scans since the last tick.")
 
     remote_updates = []
+    for position, (raw_folder_id, boundary_item_id) in enumerate(candidates):
+        # Always resolve the first candidate, otherwise the cursor never moves.
+        if position and time.monotonic() > deadline:
+            context.log.info(
+                f"Out of tick budget after {position} of {len(candidates)} folders; "
+                "the rest follows next tick."
+            )
+            new_since_id = boundary_item_id
+            break
 
-    for folder in girder.list_folders(os.environ.get("ROOT_FOLDER_ID")):
-        raw_data_folder = last_update = None
-        for raw_data_folder in girder.list_folders(folder["_id"], name="raw"):
-            for i in girder.list_item(
-                raw_data_folder["_id"], limit=1, sort="updated", sortdir=-1
-            ):
-                last_update = i["updated"]
-        if not (raw_data_folder and last_update):
+        raw_folder = girder.get_folder(raw_folder_id)
+        if raw_folder["name"] != "raw":
+            continue
+        folder = girder.get_folder(raw_folder["parentId"])
+        if folder["parentId"] != root_folder_id:
             continue
 
-        if m := _date_time_pattern.search(folder["name"]):
-            try:
-                date, time = m.group(1), m.group(2)
-                experiment_date = dateutil.parser.parse(
-                    f"{date} {time.replace('-', ':')}+00:00"
-                ).isoformat()
-            except Exception as ex:
-                print(f"Skipping {folder['name']} due to {ex}")
-                continue
+        experiment_date = _experiment_date(folder["name"])
+        if not experiment_date:
+            context.log.warning(
+                f"Skipping {folder['name']!r}: no experiment date in the folder name."
+            )
+            continue
+
         igsn = folder["name"].split("_", 1)[0]
         if not igsn_pattern.match(igsn):
             igsn = default_igsn
 
-        last_update = dateutil.parser.parse(last_update)
-        if last_update > last_scan_date:
-            remote_updates.append(
-                (folder["_id"], igsn, experiment_date, raw_data_folder["_id"])
-            )
-
-    if not remote_updates:
-        return None
+        remote_updates.append((folder["_id"], igsn, experiment_date, raw_folder["_id"]))
 
     new_partition_keys = []
     run_requests = []
@@ -154,7 +233,7 @@ def girder_xrd_delta_sensor(
             experiment_partitions.name, new_partition_keys
         )
 
-    context.update_cursor(new_cursor)
+    context.update_cursor(_make_cursor(new_since_id))
     return run_requests
 
 
